@@ -1,0 +1,258 @@
+---
+title: "Chapter1"
+author: "Low Chi Ting"
+date: "10/3/2021"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Langauge and Modelling
+
+
+@Briscoe13 provides helpful introductions to what linguistics is and how it intersects with the practical computational field of natural language processing. The broad field of linguistics includes subfields focusing on different aspects of language, which are somewhat hierarchical
+
+\index{phonetics}
+\index{phonology}
+\index{morphology}
+\index{syntax}
+\index{semantics}
+\index{pragmatics}
+
+```{r lingsubfields, echo=FALSE, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(knitr)
+tibble::tribble(
+  ~subfield, ~description,
+  "Phonetics", "Sounds that people use in language",
+  "Phonology", "Systems of sounds in particular languages",
+  "Morphology", "How words are formed",
+  "Syntax", "How sentences are formed from words",
+  "Semantics", "What sentences mean",
+  "Pragmatics", "How language is used in context"
+) %>%
+  kable(col.names = c("Linguistics subfield", "What does it focus on?"),
+        caption = "Some subfields of linguistics, moving from smaller structures to broader structures", booktabs = TRUE, linesep = "")
+```
+
+
+## Tokenization
+
+To build features for supervised machine learning from natural language, we need some way of representing raw text as numbers so we can perform computation on them. Typically, one of the first steps in this transformation from natural language to feature, or any of kind of text analysis, is tokenization. Knowing what tokenization and tokens are, along with the related concept of an n-gram, is important for almost any natural language processing task.
+
+```{r message=FALSE, warning=FALSE}
+library(tokenizers)
+library(tidyverse)
+library(tidytext)
+library(hcandersenr)
+
+the_fir_tree <- hcandersen_en %>%
+  filter(book == "The fir tree") %>%
+  pull(text)
+
+head(the_fir_tree, 9)
+
+```
+
+```{r}
+strsplit(the_fir_tree[1:2], "[^a-zA-Z0-9]+")
+```
+
+```{r}
+tokenize_words(the_fir_tree[1:2])
+```
+### Types of tokens
+
+Thinking of a token as a word is a useful way to start understanding tokenization, even if it is hard to implement concretely in software. We can generalize the idea of a token beyond only a single word to other units of text. We can tokenize text at a variety of units including:
+
+* characters,
+* words,
+* sentences,
+* lines,
+* paragraphs, and
+* n-grams
+
+
+
+```{r}
+sample_vector <- c("Far down in the forest",
+                   "grew a pretty little fir-tree")
+sample_tibble <- tibble(text = sample_vector)
+tokenize_words(sample_vector)
+```
+
+```{r}
+sample_tibble %>%
+  unnest_tokens(word, text, token = "words")
+```
+Arguments used in tokenize_words() can be passed through unnest_tokens() using the “the dots”,
+
+```{r}
+sample_tibble %>%
+  unnest_tokens(word, text, token = "words", strip_punct = FALSE)
+```
+
+### Character tokes
+
+```{r}
+tft_token_characters <- tokenize_characters(x = the_fir_tree,
+                                            lowercase = TRUE,
+                                            strip_non_alphanum = TRUE,
+                                            simplify = FALSE)
+head(tft_token_characters) %>%
+  glimpse()
+
+```
+
+We don’t have to stick with the defaults. We can keep the punctuation and spaces by setting strip_non_alphanum = FALSE, and now we see that spaces and punctuation are included in the results too.
+
+```{r}
+tokenize_characters(x = the_fir_tree,
+                    strip_non_alphanum = FALSE) %>%
+  head() %>%
+  glimpse()
+
+```
+
+## Word tokes
+
+```{r}
+tft_token_words <- tokenize_words(x = the_fir_tree,
+                                  lowercase = TRUE,
+                                  stopwords = NULL,
+                                  strip_punct = TRUE,
+                                  strip_numeric = FALSE)
+
+head(tft_token_words) %>%
+  glimpse()
+```
+
+```{r}
+hcandersen_en %>%
+  filter(book %in% c("The fir tree", "The little mermaid")) %>%
+  unnest_tokens(word, text) %>%
+  count(book, word) %>%
+  group_by(book) %>%
+  arrange(desc(n)) %>%
+  slice(1:5)
+```
+
+## Tokenizing by n-grams
+An n-gram (sometimes written “ngram”) is a term in linguistics for a contiguous sequence of  n items from a given sequence of text or speech. The item can be phonemes, syllables, letters, or words depending on the application, but when most people talk about n-grams, they mean a group of n words. In this book, we will use n-gram to denote word n-grams unless otherwise stated.
+
+The benefit of using n-grams compared to words is that n-grams capture word order that would otherwise be lost. Similarly, when we use character n-grams, we can model the beginning and end of words, because a space will be located at the end of an n-gram for the end of a word and at the beginning of an n-gram of the beginning of a word.
+
+```{r}
+tft_token_ngram <- tokenize_ngrams(x = the_fir_tree,
+                                   lowercase = TRUE,
+                                   n = 3L,
+                                   n_min = 3L,
+                                   stopwords = character(),
+                                   ngram_delim = " ",
+                                   simplify = FALSE)
+
+tft_token_ngram[[1]]
+```
+```{r ngramtokens, echo=FALSE, fig.cap="Using longer n-grams results in a higher number of unique tokens with fewer counts. Note that the color maps to counts on a logarithmic scale."}
+length_and_max <- function(x) {
+  tab <- table(x)
+  paste(length(tab), max(tab), sep = "-")
+}
+count_ngrams <- function(data, n, n_min) {
+  ngrams <- tokenize_ngrams(data, n, n_min)
+  map_chr(ngrams, length_and_max)
+}
+ngram_types <- c("quadrugram", "trigram", "bigram", "unigram")
+plotting_data <- hcandersen_en %>%
+  nest(data = c(text)) %>%
+  mutate(data = map_chr(data, ~ paste(.x$text, collapse = " "))) %>%
+  mutate(unigram = count_ngrams(data, n = 1, n_min = 1),
+         bigram = count_ngrams(data, n = 2, n_min = 2),
+         trigram = count_ngrams(data, n = 3, n_min = 3),
+         quadrugram = count_ngrams(data, n = 4, n_min = 4)) %>%
+  select(unigram, bigram, trigram, quadrugram) %>%
+  pivot_longer(cols = unigram:quadrugram, names_to = "ngrams") %>%
+  separate(value, c("length", "max"), convert = TRUE) %>%
+  mutate(ngrams = factor(ngrams, levels = ngram_types))
+plotting_data  %>%
+  ggplot(aes(length, ngrams, color = max)) +
+  geom_jitter(width = 0, alpha = 0.8, height = 0.35) +
+  scale_color_viridis_c(trans = "log", breaks = c(1, 10, 100, 1000)) +
+  labs(x = "Number of unique n-grams",
+       y = NULL,
+       color = "Count of\nmost frequent\nngram",
+       title = "Unique n-grams by n-gram order",
+       subtitle = "Each point represents a H.C. Andersen Fairy tale")
+```
+
+```{r}
+tft_token_ngram <- tokenize_ngrams(x = the_fir_tree,
+                                   n = 2L,
+                                   n_min = 1L)
+tft_token_ngram[[1]]
+```
+
+## Lines sentence and paragraph tokens
+
+Tokenizers to split text into larger units of text like lines, sentences, and paragraphs are rarely used directly for modeling purposes, as the tokens produced tend to be fairly unique. It is very uncommon for multiple sentences in a text to be identical! However, these tokenizers are useful for preprocessing and labeling.
+
+For example, Jane Austen’s novel Northanger Abbey (as available in the janeaustenr package) is already preprocessed with each line being at most 80 characters long. However, it might be useful to split the data into chapters and paragraphs instead.
+
+Let’s create a function that takes a dataframe containing a variable called text and turns it into a dataframe where the text is transformed into paragraphs. First, we can collapse the text into one long string using collapse = "\n" to denote line breaks, and then next we can use tokenize_paragraphs() to identify the paragraphs and put them back into a dataframe. We can add a paragraph count with row_number().
+
+```{r}
+add_paragraphs <- function(data) {
+  pull(data, text) %>%
+    paste(collapse = "\n") %>%
+    tokenize_paragraphs() %>%
+    unlist() %>%
+    tibble(text = .) %>%
+    mutate(paragraph = row_number())
+}
+
+library(janeaustenr)
+
+northangerabbey_paragraphed <- tibble(text = northangerabbey) %>%
+  mutate(chapter = cumsum(str_detect(text, "^CHAPTER "))) %>%
+  filter(chapter > 0,
+         !str_detect(text, "^CHAPTER ")) %>%
+  nest(data = text) %>%
+  mutate(data = map(data, add_paragraphs)) %>%
+  unnest(cols = c(data))
+
+glimpse(northangerabbey_paragraphed)
+
+```
+
+```{r}
+
+the_fir_tree_sentences <- the_fir_tree %>%
+  paste(collapse = " ") %>%
+  tokenize_sentences()
+
+head(the_fir_tree_sentences[[1]])
+```
+
+```{r}
+hcandersen_sentences <- hcandersen_en %>%
+  nest(data = c(text)) %>%
+  mutate(data = map_chr(data, ~ paste(.x$text, collapse = " "))) %>%
+  unnest_sentences(sentences, data)
+```
+
+
+
+```{r}
+library(jiebaR)
+words <- c("下面是不分行输出的结果", "下面是不输出的结果")
+
+engine1 <- worker(bylines = TRUE)
+
+segment(words, engine1)
+```
+
