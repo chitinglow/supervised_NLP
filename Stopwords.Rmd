@@ -8,3 +8,279 @@ output: html_document
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
+
+```{r}
+library(tidyverse)
+library(stopwords)
+length(stopwords(source = "smart"))
+length(stopwords(source = "snowball"))
+length(stopwords(source = "stopwords-iso"))
+```
+
+```{r stopwordoverlap, echo=FALSE, fig.cap="Set intersections for three common stop word lists visualized as an UpSet plot"}
+library(UpSetR)
+fromList(list(smart = stopwords(source = "smart"),
+              snowball = stopwords(source = "snowball"),
+              iso = stopwords(source = "stopwords-iso"))) %>%
+  upset(empty.intersections = "on")
+```
+
+```{r}
+setdiff(stopwords(source = "snowball"),
+        stopwords(source = "smart"))
+```
+
+```{r}
+str_subset(stopwords(source = "smart"), "'")
+```
+
+## Remove stop words
+
+```{r}
+
+library(hcandersenr)
+library(tidyverse)
+library(tidytext)
+
+fir_tree <- hca_fairytales() %>%
+  filter(book == "The fir tree",
+         language == "English")
+
+tidy_fir_tree <- fir_tree %>%
+  unnest_tokens(word, text)
+
+tidy_fir_tree %>%
+  filter(!(word %in% stopwords(source = "snowball")))
+```
+
+```{r}
+tidy_fir_tree %>%
+  anti_join(get_stopwords(source = "snowball"))
+```
+
+```{r eval=!knitr:::is_html_output(), echo=FALSE, fig.cap='(ref:tidyfirtree)', message=TRUE, warning=TRUE}
+tidy_fir_tree %>%
+  count(word, sort = TRUE) %>%
+  slice(1:120) %>%
+  mutate(row = rep(1:5, each = n() / 5),
+         column = rep(rev(seq_len(n() / 5)), length.out = n())) %>%
+  mutate(word = paste0(row_number(), ": ", word)) %>%
+  ggplot(aes(row, column, label = word)) +
+  geom_text(hjust = 0) +
+  xlim(c(1, 5.5)) +
+  theme_void() +
+  labs(title = 'Most frequent tokens in "The Fir-Tree"')
+```
+```{r, eval=!knitr:::is_html_output(), echo=FALSE, fig.cap="Words in all English fairy tales by Hans Christian Andersen ordered by count or frequency"}
+library(hcandersenr)
+library(tidytext)
+hcandersen_en %>%
+  unnest_tokens(word, text) %>%
+  count(word, sort = TRUE) %>%
+  slice(1:120) %>%
+  mutate(row = rep(1:5, each = n() / 5),
+         column = rep(rev(seq_len(n() / 5)), length.out = n())) %>%
+  mutate(word = paste0(row_number(), ": ", word)) %>%
+  ggplot(aes(row, column, label = word)) +
+  geom_text(hjust = 0) +
+  xlim(c(1, 5.5)) +
+  theme_void() +
+  labs(
+    title = "120 most frequent tokens in H.C. Andersen's English fairy tales"
+  )
+```
+
+
+This list is more appropriate for our concept of stop words, and now it is time for us to make some choices. How many do we want to include in our stop word list? Which words should we add and/or remove based on prior information? Selecting the number of words to remove is best done by a case-by-case basis as it can be difficult to determine a priori how many different "meaningless" words appear in a corpus. Our suggestion is to start with a low number like 20 and increase by 10 words until you get to words that are not appropriate as stop words for your analytical purpose. 
+
+It is worth keeping in mind that such a list is not perfect.\index{preprocessing!challenges} Depending on how your text was generated or processed, strange tokens can surface as possible stop words due to encoding or optical character recognition errors. Further, these results are based on the corpus of documents we have available, which is potentially biased. In our example here, all the fairy tales were written by the same European white man from the early 1800s. 
+
+```{block, type = "rmdnote"}
+This bias can be minimized by removing words we would expect to be over-represented or to add words we expect to be under-represented.
+```
+
+Easy examples are to include the complements to the words in the list if they are not already present. Include "big" if "small" is present, "old" if "young" is present. This example list has words associated with women often listed lower in rank than words associated with men. With `"man"` being at rank 79 but `"woman"` at rank `r hcandersenr::hcandersen_en %>% tidytext::unnest_tokens(word, text) %>% count(word, sort = TRUE) %>% pull(word) %>% magrittr::equals("woman") %>% which()`, choosing a threshold of 100 would lead to only one of these words being included. Depending on how important you think such nouns are going to be in your texts, consider either adding `"woman"` or deleting `"man"`.^[On the other hand, the more biased stop word list may be helpful when modeling a corpus with gender imbalance, depending on your goal; words like "she" and "her" can identify where women are mentioned.]
+
+\index{bias}Figure \@ref(fig:genderrank) shows how the words associated with men have a higher rank than the words associated with women. By using a single threshold to create a stop word list, you would likely only include one form of such words.
+
+```{r genderrank, echo=FALSE, fig.width = 8, fig.cap="Tokens ranked according to total occurrences, with rank 1 having the most occurrences"}
+gender_words <- tribble(
+  ~men, ~women,
+  "he", "she",
+  "his", "her",
+  "man", "woman",
+  "men", "women",
+  "boy", "girl",
+  "he's", "she's",
+  "he'd", "she'd",
+  "he'll", "she'll",
+  "himself", "herself"
+)
+ordered_words <- hcandersen_en %>%
+  unnest_tokens(word, text) %>%
+  count(word, sort = TRUE) %>%
+  pull(word)
+gender_words_plot <- gender_words %>%
+  mutate(male_index = match(men, ordered_words),
+         female_index = match(women, ordered_words)) %>%
+  mutate(slope = log10(male_index) - log10(female_index)) %>%
+  pivot_longer(male_index:female_index) %>%
+  mutate(value = log10(value),
+         label = ifelse(name == "male_index", men, women)) %>%
+  mutate(name = factor(x = name,
+                       levels = c("male_index", "female_index"),
+                       labels = c("men", "women")))
+limit <- max(abs(gender_words_plot$slope)) * c(-1, 1)
+gender_words_plot %>%
+  ggplot(aes(name, value, group = women)) +
+  geom_line(aes(color = slope), size = 1) +
+  scale_y_reverse(labels = function(x) 10 ^ x) +
+  geom_text(aes(label = label)) +
+  scale_color_distiller(type = "div", limit = limit) +
+  guides(color = "none") +
+  theme(panel.border = element_blank(), panel.grid.major.x = element_blank()) +
+  labs(x = NULL, y = "Word rank (log scale)") +
+  labs(title = paste("Masculine gendered words appear more often in",
+                     "H.C. Andersen's fairy tales"))
+```
+
+Imagine now we would like to create a stop word list that spans multiple different genres, in such a way that the subject-specific stop words don't overlap. For this case, we would like words to be denoted as a stop word only if it is a stop word in all the genres. You could find the words individually in each genre and use the right intersections. However, that approach might take a substantial amount of time.
+
+Below is a bad approach where we try to create a multi-language list of stop words. To accomplish this we calculate the [*inverse document frequency*](https://www.tidytextmining.com/tfidf.html) (IDF) \index{inverse document frequency}of each word. The IDF of a word is a quantity that is low for commonly-used words in a collection of documents and high for words not used often in a collection of documents. It is typically defined as
+
+$$idf(\text{term}) = \ln{\left(\frac{n_{\text{documents}}}{n_{\text{documents containing term}}}\right)}$$
+
+If the word "dog" appears in 4 out of 100 documents then it would have an `idf("dog") = log(100/4) = 3.22`, and if the word "cat" appears in 99 out of 100 documents then it would have an `idf("cat") = log(100/99) = 0.01`. Notice how the idf values goes to zero (as a matter of fact when a term appears in all the documents then the idf of that word is 0 `log(100/100) = log(1) = 0`), the more documents it is contained in.
+What happens if we create a stop word list based on words with the lowest IDF? The following function takes a tokenized dataframe and returns a dataframe with a column for each word and a column for the IDF.
+
+```{r}
+library(rlang)
+calc_idf <- function(df, word, document) {
+  words <- df %>% pull({{word}}) %>% unique()
+  n_docs <- length(unique(pull(df, {{document}})))
+  n_words <- df %>%
+    nest(data = c({{word}})) %>%
+    pull(data) %>%
+    map_dfc(~ words %in% unique(pull(.x, {{word}}))) %>%
+    rowSums()
+  
+  tibble(word = words,
+         idf = log(n_docs / n_words))
+}
+```
+
+Here is the result when we try to create a cross-language list of stop words, by taking each fairy tale as a document. It is not very good! 
+
+```{block, type = "rmdnote"}
+The overlap between words that appear in each language is very small, but these words are what we mostly see in this list.
+```
+
+```{r, eval=!knitr:::is_html_output(), echo=FALSE, fig.cap="Words from all of H.C. Andersen's fairy tales in Danish, English, French, German, and Spanish, counted and ordered by IDF"}
+hcandersenr::hca_fairytales() %>%
+  unnest_tokens(word, text) %>%
+  mutate(document = paste(language, book)) %>%
+  select(word, document) %>%
+  calc_idf(word, document) %>%
+  arrange(idf) %>%
+  slice(1:120) %>%
+  mutate(row = rep(1:5, each = n() / 5),
+         column = rep(rev(seq_len(n() / 5)), length.out = n())) %>%
+  mutate(word = paste0(row_number(), ": ", word)) %>%
+  ggplot(aes(row, column, label = word)) +
+  geom_text(hjust = 0) +
+  xlim(c(1, 5.5)) +
+  theme_void() +
+  labs(title = paste("120 tokens in H.C. Andersen's fairy tales with",
+                     "lowest IDF, multi-language"))
+```
+
+
+
+```{block, type = "rmdwarning"}
+This didn't work very well because there is very little overlap between common words. Instead, let us limit the calculation to only one language and calculate the IDF of each word we can find compared to words that appear in a lot of documents.
+```
+
+\index{inverse document frequency}
+
+```{r, eval=!knitr:::is_html_output(), echo=FALSE, fig.cap="Words from all of H.C. Andersen's fairy tales in English, counted and ordered by IDF"}
+hcandersenr::hcandersen_en %>%
+  unnest_tokens(word, text) %>%
+  select(word, book) %>%
+  calc_idf(word, book) %>%
+  arrange(idf) %>%
+  slice(1:120) %>%
+  mutate(row = rep(1:5, each = n() / 5),
+         column = rep(rev(seq_len(n() / 5)), length.out = n())) %>%
+  mutate(word = paste0(row_number(), ": ", word)) %>%
+  ggplot(aes(row, column, label = word)) +
+  geom_text(hjust = 0) +
+  xlim(c(1, 5.5)) +
+  theme_void() +
+  labs(title = paste("120 tokens in H.C. Andersen's fairy tales with",
+                     "lowest IDF, English only"))
+```
+
+
+```{r stopwordresults, echo=FALSE, fig.cap="Proportion of words removed for different stop word lists and different document lengths"}
+library(tokenizers)
+count_no_stopwords <- function(tokens, source) {
+  map_int(tokens, ~ length(setdiff(.x, stopwords(source = source))))
+}
+plotting_data <- hcandersen_en %>%
+  nest(data = c(text)) %>%
+  mutate(tokens = map(data, ~ unlist(tokenize_words(.x$text))),
+         no_snowball = count_no_stopwords(tokens, "snowball"),
+         no_smart = count_no_stopwords(tokens, "smart"),
+         no_iso = count_no_stopwords(tokens, "stopwords-iso"),
+         n_tokens = lengths(tokens)) %>%
+  pivot_longer(no_snowball:no_iso) %>%
+  mutate(value = 1 - value / n_tokens)
+stopwords_labels <- c("snowball (175)", "smart (571)", "stopwords-iso (1298)")
+plotting_data %>%
+  mutate(name = factor(name,
+                       levels = c("no_snowball", "no_smart",  "no_iso"),
+                       labels =  stopwords_labels),
+         name = fct_rev(name)) %>%
+  ggplot(aes(n_tokens, value, color = name)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "loess", se = FALSE) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(
+    x = "Number of words in fairy tale",
+    y = "Percentage of words removed",
+    color = "Removed",
+    title = paste("Stop words take up a larger part of the text in",
+                  "longer fairy tales"),
+    subtitle = paste("Each vertical trio of points represents an",
+                     "H.C. Andersen fairy tale")
+  )
+```
+
+
+
+
+```{r, echo=FALSE}
+library(magrittr)
+library(gt)
+tibble::tribble(
+  ~Masculine, ~Feminine, ~Neuter, ~Plural, ~case,
+  "der", "die", "das", "die", "Nominative",
+  "den", "die", "das", "die", "Accusative",
+  "dem", "der", "dem", "den", "Dative",
+  "des", "der", "des", "der", "Genitive"
+) %>%
+  gt(rowname_col = "case") %>%
+  tab_header(title = "German Definite Articles (the)")
+```
+
+```{r, echo=FALSE}
+tibble::tribble(
+  ~Masculine, ~Feminine, ~Neuter, ~case,
+  "ein", "eine", "ein", "Nominative",
+  "einen", "eine", "ein", "Accusative",
+  "einem", "einer", "einem", "Dative",
+  "eines", "einer", "eines", "Genitive"
+) %>%
+  gt(rowname_col = "case") %>%
+  tab_header(title = "German Indefinite Articles (a/an)")
+```
